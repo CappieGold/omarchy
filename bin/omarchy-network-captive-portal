@@ -1,0 +1,53 @@
+#!/bin/bash
+
+# omarchy:summary=Open a captive portal's sign-in page, pausing any Tailscale exit node until online
+# omarchy:group=network
+# omarchy:args=<url>
+
+set -euo pipefail
+
+url=${1:?Usage: omarchy-network-captive-portal <url>}
+tailscale_socket=/var/run/tailscale/tailscaled.sock
+paused_exit_node=0
+
+# An exit node routes the portal's sign-in page into a tunnel the portal is
+# still blocking. tailscaled's own toggle (the one Tailscale's apps use) turns
+# it off and remembers the node, so the same one comes back afterwards.
+exit_node_active() {
+  omarchy-cmd-present tailscale && tailscale status --json 2>/dev/null | jq -e '.ExitNodeStatus != null' >/dev/null
+}
+
+set_exit_node_enabled() {
+  curl -fsS --unix-socket "$tailscale_socket" -X POST \
+    "http://local-tailscaled.sock/localapi/v0/set-use-exit-node-enabled?enabled=$1" >/dev/null
+}
+
+restore_exit_node() {
+  if (( paused_exit_node )); then
+    paused_exit_node=0
+    if set_exit_node_enabled true; then
+      omarchy-notification-send "Tailscale exit node restored"
+    else
+      omarchy-notification-send -u critical "Couldn't restore the Tailscale exit node" "Turn it back on with Tailscale"
+    fi
+  fi
+}
+
+trap restore_exit_node EXIT
+
+if exit_node_active && set_exit_node_enabled false; then
+  paused_exit_node=1
+  omarchy-notification-send "Tailscale exit node paused" "It comes back once you're signed in"
+fi
+
+omarchy-launch-browser "$url"
+
+# Nothing on the machine changes when the sign-in completes, so ask
+# NetworkManager to re-check often for a while. Its connectivity state updates
+# as it does, which is what the panel shows.
+for (( i = 0; i < 300; i++ )); do
+  if [[ $(nmcli networking connectivity check 2>/dev/null) == "full" ]]; then
+    break
+  fi
+  sleep 2
+done

@@ -538,7 +538,9 @@ Panel {
     if (!hasCaptivePortal) return
     // Explicit user action only. argv (not a shell string), and a fixed HTTP
     // URL: let the browser handle the redirect without trusting portal input.
-    Quickshell.execDetached(["omarchy-launch-browser", Model.captivePortalUrl])
+    // The command pauses a Tailscale exit node and re-checks quickly until the
+    // sign-in completes.
+    Quickshell.execDetached(["omarchy-network-captive-portal", Model.captivePortalUrl])
     close()
   }
 

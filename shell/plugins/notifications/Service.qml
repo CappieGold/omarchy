@@ -611,10 +611,13 @@ Item {
   }
 
   // One clock the cards' relative times hang off, rather than a timer per card.
+  // It stops with no cards on screen, so it catches up as soon as one shows:
+  // replayed history would otherwise read against the hour it last ticked.
   property double nowTick: Date.now()
   Timer {
     interval: 20000
     repeat: true
+    triggeredOnStart: true
     running: toasts.count > 0
     onTriggered: service.nowTick = Date.now()
   }

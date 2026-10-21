@@ -1391,8 +1391,8 @@ Panel {
 
           // Always mounted: these two used to appear a beat after the panel
           // opened, once the first probe returned, shoving everything below
-          // them down. They now hold their place and read "--" until a probe
-          // gets through.
+          // them down. They now hold their place and read "--" until there is
+          // a sample, and while the internet is out of reach.
           InfoLabel { text: Commons.I18n.t("network.ping") }
           DetailValue {
             text: root.formatPingLatency(root.internetPingLatency)

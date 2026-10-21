@@ -264,10 +264,7 @@ function pingPacketLossPercent(samples) {
 function internetPingReadable(samples, connectivity) {
   var values = Array.isArray(samples) ? samples : []
   if (connectivity === "portal" || connectivity === "limited" || connectivity === "none") return false
-  for (var i = 0; i < values.length; i++) {
-    if (values[i] !== null) return true
-  }
-  return false
+  return values.length > 0
 }
 
 function formatPacketLoss(percent, hasSamples, fmt) {

@@ -189,7 +189,7 @@ assertEqual(network.formatPacketLoss(0), '0%', 'network formats zero packet loss
 assertEqual(network.formatPacketLoss(0, false), '--', 'network holds the packet loss row before the first sample')
 assertEqual(network.formatPacketLoss(0, true), '0%', 'network reports zero loss once samples exist')
 assertEqual(network.internetPingReadable([], 'full'), false, 'network hides ping before the first sample')
-assertEqual(network.internetPingReadable([null, null], 'full'), false, 'network hides ping when no probe has come back')
+assertEqual(network.internetPingReadable([null, null], 'full'), true, 'network still reports lost probes on a working connection')
 assertEqual(network.internetPingReadable([null, 12], 'full'), true, 'network shows ping once a probe comes back')
 assertEqual(network.internetPingReadable([12], 'portal'), false, 'network hides ping behind a captive portal')
 assertEqual(network.internetPingReadable([12], 'limited'), false, 'network hides ping on a limited connection')

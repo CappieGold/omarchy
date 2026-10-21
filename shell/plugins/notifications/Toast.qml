@@ -632,68 +632,74 @@ Item {
             elide: Text.ElideRight
           }
         }
+      }
+    }
 
-        // The space under the body does one job at a time: the right-click
-        // menu, the "More" list, or the button row. Lists are drawn in the
-        // card, not as popups, because the surface is clipped. The row shows
-        // only under the pointer in an open deck.
-        Item {
-          id: deedArea
-          width: parent.width
+    // The space under the body does one job at a time: the right-click
+    // menu, the "More" list, or the button row. Lists are drawn in the
+    // card, not as popups, because the surface is clipped. The row shows
+    // only under the pointer in an open deck. It spans the content under the
+    // mark too, and keeps the side padding below it.
+    Item {
+      id: deedArea
+      anchors { left: parent.left; right: parent.right; bottom: parent.bottom
+                leftMargin: plate.contentLeftInset + Style.space(12)
+                rightMargin: plate.contentRightInset + Style.space(12)
+                bottomMargin: plate.contentBottomInset + Style.space(12) }
 
-          readonly property string mode: card.menuOpen ? "menu"
-                                       : card.deedsOpen ? "list"
-                                       : (card.hovered && card.expanded
-                                          && card.allDeeds.length > 0) ? "row" : ""
+      readonly property string mode: card.menuOpen ? "menu"
+                                   : card.deedsOpen ? "list"
+                                   : (card.hovered && card.expanded
+                                      && card.allDeeds.length > 0) ? "row" : ""
 
-          readonly property real contentHeight: mode === "menu" ? menuColumn.implicitHeight
-                                              : mode === "list" ? deedColumn.implicitHeight
-                                              : mode === "row" ? deedRow.implicitHeight : 0
-          // What the state asks for; the drawn height is whatever slack the
-          // scene has given the card so far.
-          readonly property real wanted: mode === "" ? 0 : contentHeight + Style.space(7)
-          height: Math.max(0, card.drawnHeight - card.fixedHeight)
-          visible: height > 0
-          clip: true
+      readonly property real contentHeight: mode === "menu" ? menuColumn.implicitHeight
+                                          : mode === "list" ? deedColumn.implicitHeight
+                                          : mode === "row" ? deedRow.implicitHeight : 0
+      // What the state asks for; the drawn height is whatever slack the
+      // scene has given the card so far. The card already pads its text at
+      // the bottom; extraPadding tops that up to the side padding.
+      readonly property real extraPadding: Style.space(12) - card.contentPaddingY
+      readonly property real wanted: mode === "" ? 0 : contentHeight + Style.space(10) + extraPadding
+      height: Math.max(0, card.drawnHeight - card.fixedHeight - extraPadding)
+      visible: height > 0
+      clip: true
 
-          Row {
-            id: deedRow
-            anchors.bottom: parent.bottom
-            anchors.right: card.actionsAlign === "right" ? parent.right : undefined
-            anchors.left: card.actionsAlign === "right" ? undefined : parent.left
-            spacing: Style.space(6)
-            opacity: deedArea.mode === "row" ? 1 : 0
-            visible: opacity > 0.01
-            Behavior on opacity { NumberAnimation { duration: card.fade } }
+      Row {
+        id: deedRow
+        anchors.bottom: parent.bottom
+        anchors.right: card.actionsAlign === "right" ? parent.right : undefined
+        anchors.left: card.actionsAlign === "right" ? undefined : parent.left
+        spacing: Style.space(6)
+        opacity: deedArea.mode === "row" ? 1 : 0
+        visible: opacity > 0.01
+        Behavior on opacity { NumberAnimation { duration: card.fade } }
 
-            Repeater {
-              model: card.deeds
-              DeedButton {
-                required property var modelData
-                deed: modelData
-                toast: card
-              }
-            }
-
-            DeedButton {
-              visible: card.spare.length > 0
-              deed: card.moreDeed
-              toast: card
-            }
-          }
-
-          DeedList {
-            id: deedColumn
-            shown: deedArea.mode === "list"
-            deedModel: card.deedsOpen ? card.allDeeds : []
-          }
-
-          DeedList {
-            id: menuColumn
-            shown: deedArea.mode === "menu"
-            deedModel: card.menuOpen ? card.menuDeeds : []
+        Repeater {
+          model: card.deeds
+          DeedButton {
+            required property var modelData
+            deed: modelData
+            toast: card
           }
         }
+
+        DeedButton {
+          visible: card.spare.length > 0
+          deed: card.moreDeed
+          toast: card
+        }
+      }
+
+      DeedList {
+        id: deedColumn
+        shown: deedArea.mode === "list"
+        deedModel: card.deedsOpen ? card.allDeeds : []
+      }
+
+      DeedList {
+        id: menuColumn
+        shown: deedArea.mode === "menu"
+        deedModel: card.menuOpen ? card.menuDeeds : []
       }
     }
 

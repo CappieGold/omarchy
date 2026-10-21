@@ -36,9 +36,19 @@ for (const state of ['full', 'unknown', 'none', undefined]) {
 }
 const url = new URL(network.captivePortalUrl)
 assertEqual(url.protocol, 'http:', 'browser entry point uses plain HTTP so a portal can intercept it')
-assertEqual(url.hostname, 'ping.archlinux.org', 'browser entry point is fixed rather than portal-supplied')
+assertEqual(url.hostname, 'ping.omarchy.org', 'browser entry point is fixed rather than portal-supplied')
 assertEqual(url.username + url.password, '', 'browser entry point contains no credentials')
 JS
+
+# The browser must open the URL NetworkManager probes, or a portal that only
+# intercepts the probed host would never show its sign-in page.
+nm_conf="$ROOT/etc/NetworkManager/conf.d/omarchy-connectivity.conf"
+nm_uri=$(sed -n 's/^uri=//p' "$nm_conf")
+panel_uri=$(sed -n 's/^var captivePortalUrl = "\(.*\)"$/\1/p' "$ROOT/shell/plugins/panels/network/Model.js")
+[[ -n $nm_uri && $nm_uri == "$panel_uri" ]] || fail "NetworkManager probes the URL the panel opens ($nm_uri vs $panel_uri)"
+pass "NetworkManager probes the URL the panel opens"
+[[ $(sed -n 's/^response=\(.*\)$/[\1]/p' "$nm_conf") == "[]" ]] || fail "NetworkManager expects the endpoint's empty 204"
+pass "NetworkManager expects the endpoint's empty 204"
 
 require_compositor "network captive-portal runtime test"
 require_command quickshell
@@ -99,5 +109,5 @@ if rg -q 'RESULT fail|ReferenceError|TypeError|Error:|Unable to assign|Binding l
   fail "network portal fixture has no QML errors" "$output"
 fi
 [[ -f $stage/browser.log ]] || fail "portal action launches the browser"
-[[ $(<"$stage/browser.log") == "http://ping.archlinux.org/nm-check.txt" ]] || fail "portal opens exactly one fixed HTTP URL"
+[[ $(<"$stage/browser.log") == "http://ping.omarchy.org/nm-check.txt" ]] || fail "portal opens exactly one fixed HTTP URL"
 pass "network portal, recovery, disabled checks, outage, disconnect, keyboard navigation, and browser argv work in QML"

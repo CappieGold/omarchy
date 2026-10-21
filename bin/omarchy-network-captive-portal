@@ -8,6 +8,7 @@ set -euo pipefail
 
 url=${1:?Usage: omarchy-network-captive-portal <url>}
 tailscale_socket=/var/run/tailscale/tailscaled.sock
+lock=${XDG_RUNTIME_DIR:-/run/user/$UID}/omarchy-network-captive-portal.lock
 paused_exit_node=0
 
 # An exit node routes the portal's sign-in page into a tunnel the portal is
@@ -26,28 +27,42 @@ restore_exit_node() {
   if (( paused_exit_node )); then
     paused_exit_node=0
     if set_exit_node_enabled true; then
-      omarchy-notification-send "Tailscale exit node restored"
+      omarchy-notification-send "Tailscale exit node restored" 9>&-
     else
-      omarchy-notification-send -u critical "Couldn't restore the Tailscale exit node" "Turn it back on with Tailscale"
+      omarchy-notification-send -u critical "Couldn't restore the Tailscale exit node" "Turn it back on with Tailscale" 9>&-
     fi
   fi
 }
 
-trap restore_exit_node EXIT
-
-if exit_node_active && set_exit_node_enabled false; then
-  paused_exit_node=1
-  omarchy-notification-send "Tailscale exit node paused" "It comes back once you're signed in"
-fi
-
-omarchy-launch-browser "$url"
-
 # Nothing on the machine changes when the sign-in completes, so ask
-# NetworkManager to re-check often for a while. Its connectivity state updates
-# as it does, which is what the panel shows.
-for (( i = 0; i < 300; i++ )); do
-  if [[ $(nmcli networking connectivity check 2>/dev/null) == "full" ]]; then
-    break
+# NetworkManager to re-check: often while a sign-in is likely, then gently
+# until it is done. Its connectivity state updates as it does, which is what
+# the panel shows. Joining any other working network ends the wait too.
+wait_until_online() {
+  local fast_until=$(( SECONDS + 300 ))
+
+  until [[ $(timeout 5 nmcli networking connectivity check 2>/dev/null) == "full" ]]; do
+    if (( SECONDS < fast_until )); then
+      sleep 2
+    else
+      sleep 15
+    fi
+  done
+}
+
+exec 9>"$lock"
+if flock -n 9; then
+  trap restore_exit_node EXIT
+
+  if exit_node_active && set_exit_node_enabled false; then
+    paused_exit_node=1
+    omarchy-notification-send "Tailscale exit node paused" "It comes back once you're signed in" 9>&-
   fi
-  sleep 2
-done
+
+  omarchy-launch-browser "$url" 9>&-
+  wait_until_online
+else
+  # An earlier click is already holding the pause and watching for the
+  # sign-in, so this one only brings the portal back up.
+  omarchy-launch-browser "$url" 9>&-
+fi

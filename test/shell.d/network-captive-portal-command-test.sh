@@ -25,7 +25,7 @@ stub nmcli 'count=$(( $(cat "$TEST_NMCLI_COUNT" 2>/dev/null || echo 0) + 1 )); e
 run_portal() {
   rm -f "$stage/log" "$stage/count"
   TEST_LOG="$stage/log" TEST_NMCLI_COUNT="$stage/count" XDG_RUNTIME_DIR="$stage" TEST_TAILSCALE_STATUS="$1" TEST_CURL_STATUS="${2:-0}" \
-    PATH="$stage/bin:$ROOT/bin:$PATH" "$ROOT/bin/omarchy-network-captive-portal" "http://ping.omarchy.org/nm-check.txt"
+    PATH="$stage/bin:$ROOT/bin:$PATH" "$ROOT/bin/omarchy-network-captive-portal" "http://ping.omacom.io/nm-check.txt"
 }
 
 toggle="http://local-tailscaled.sock/localapi/v0/set-use-exit-node-enabled"
@@ -33,7 +33,7 @@ toggle="http://local-tailscaled.sock/localapi/v0/set-use-exit-node-enabled"
 run_portal '{"ExitNodeStatus":{"ID":"node","Online":true}}'
 expected="curl $toggle?enabled=false
 notify Tailscale exit node paused It comes back once you're signed in
-browser http://ping.omarchy.org/nm-check.txt
+browser http://ping.omacom.io/nm-check.txt
 curl $toggle?enabled=true
 notify Tailscale exit node restored"
 [[ $(<"$stage/log") == "$expected" ]] || fail "pauses the exit node, opens the portal, and restores it once online" "$(<"$stage/log")"
@@ -42,12 +42,12 @@ pass "pauses the exit node, opens the portal, and restores it once online"
 pass "re-checks until connectivity is full, then stops"
 
 run_portal '{"ExitNodeStatus":null}'
-[[ $(<"$stage/log") == "browser http://ping.omarchy.org/nm-check.txt" ]] || fail "leaves Tailscale alone without an exit node" "$(<"$stage/log")"
+[[ $(<"$stage/log") == "browser http://ping.omacom.io/nm-check.txt" ]] || fail "leaves Tailscale alone without an exit node" "$(<"$stage/log")"
 pass "leaves Tailscale alone without an exit node"
 
 run_portal '{"ExitNodeStatus":{"ID":"node","Online":true}}' 1
 [[ $(<"$stage/log") == "curl $toggle?enabled=false
-browser http://ping.omarchy.org/nm-check.txt" ]] || fail "does not restore an exit node it failed to pause" "$(<"$stage/log")"
+browser http://ping.omacom.io/nm-check.txt" ]] || fail "does not restore an exit node it failed to pause" "$(<"$stage/log")"
 pass "does not restore an exit node it failed to pause"
 
 # Well past the old ten-minute cap: the exit node stays paused until online.
@@ -61,5 +61,5 @@ exec 8>"$stage/omarchy-network-captive-portal.lock"
 flock -n 8
 run_portal '{"ExitNodeStatus":{"ID":"node","Online":true}}'
 exec 8>&-
-[[ $(<"$stage/log") == "browser http://ping.omarchy.org/nm-check.txt" ]] || fail "a second click only reopens the portal" "$(<"$stage/log")"
+[[ $(<"$stage/log") == "browser http://ping.omacom.io/nm-check.txt" ]] || fail "a second click only reopens the portal" "$(<"$stage/log")"
 pass "a second click only reopens the portal"

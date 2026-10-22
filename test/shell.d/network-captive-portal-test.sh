@@ -36,7 +36,7 @@ for (const state of ['full', 'unknown', 'none', undefined]) {
 }
 const url = new URL(network.captivePortalUrl)
 assertEqual(url.protocol, 'http:', 'browser entry point uses plain HTTP so a portal can intercept it')
-assertEqual(url.hostname, 'ping.omarchy.org', 'browser entry point is fixed rather than portal-supplied')
+assertEqual(url.hostname, 'ping.omacom.io', 'browser entry point is fixed rather than portal-supplied')
 assertEqual(url.username + url.password, '', 'browser entry point contains no credentials')
 JS
 
@@ -109,5 +109,5 @@ if rg -q 'RESULT fail|ReferenceError|TypeError|Error:|Unable to assign|Binding l
   fail "network portal fixture has no QML errors" "$output"
 fi
 [[ -f $stage/browser.log ]] || fail "portal action launches the browser"
-[[ $(<"$stage/browser.log") == "http://ping.omarchy.org/nm-check.txt" ]] || fail "portal opens exactly one fixed HTTP URL"
+[[ $(<"$stage/browser.log") == "http://ping.omacom.io/nm-check.txt" ]] || fail "portal opens exactly one fixed HTTP URL"
 pass "network portal, recovery, disabled checks, outage, disconnect, keyboard navigation, and browser argv work in QML"

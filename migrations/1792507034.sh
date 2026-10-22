@@ -1,4 +1,4 @@
-echo "Check network connectivity against ping.omarchy.org"
+echo "Check network connectivity against ping.omacom.io"
 
 as_root() {
   if (( EUID == 0 )); then

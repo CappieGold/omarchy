@@ -124,8 +124,11 @@ if [[ ${1:-} == "-y" ]] || omarchy-update-confirm; then
   omarchy-update-system-pkgs
 
   # A settings update rewrites nsswitch.conf without sss, which silently
-  # breaks every directory account, so machines with SSSD get it back here.
-  # Nothing else depends on it, so a failure is reported without stopping.
+  # breaks every directory account. The pacman hook omarchy setup ad writes
+  # restores it inside the transaction, where a directory account can still
+  # rely on root; this covers machines set up without that hook, and does
+  # nothing once the hook has run. Nothing else depends on it, so a failure is
+  # reported without stopping.
   omarchy-apply-sssd ||
     echo -e "\e[33mCould not re-apply the SSSD setup. Run omarchy-apply-sssd to retry.\e[0m" >&2
 

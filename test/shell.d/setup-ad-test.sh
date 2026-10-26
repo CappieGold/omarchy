@@ -14,6 +14,7 @@ stub_bin="$test_tmp/bin"
 calls="$test_tmp/calls"
 sssd_conf="$test_tmp/sssd.conf"
 joined="$test_tmp/joined"
+pacman_hook="$test_tmp/pacman.hook"
 mkdir -p "$stub_bin"
 
 # The commands that reach the machine are stubs that log their arguments; the
@@ -23,6 +24,7 @@ cat >"$stub_bin/sudo" <<'STUB'
 #!/bin/bash
 printf 'sudo %s\n' "$*" >>"$CALL_LOG"
 args=("${@//\/etc\/sssd\/sssd.conf/$SSSD_CONF}")
+args=("${args[@]//\/etc\/pacman.d\/hooks\/50-omarchy-sssd.hook/$PACMAN_HOOK}")
 
 case ${args[0]} in
   cat) cat "${args[@]:1}" ;;
@@ -87,7 +89,7 @@ CONF
 
 run_setup() {
   set +e
-  output=$(env PATH="$stub_bin:/usr/bin:/bin" CALL_LOG="$calls" SSSD_CONF="$sssd_conf" JOINED="$joined" \
+  output=$(env PATH="$stub_bin:/usr/bin:/bin" CALL_LOG="$calls" SSSD_CONF="$sssd_conf" JOINED="$joined" PACMAN_HOOK="$pacman_hook" \
     REALM_DISCOVER_FAILS="${REALM_DISCOVER_FAILS:-}" bash "$setup_ad" "$@" 2>&1)
   status=$?
   set -e
@@ -95,7 +97,7 @@ run_setup() {
 
 reset_setup() {
   : >"$calls"
-  rm -f "$joined"
+  rm -f "$joined" "$pacman_hook"
   write_sssd_conf
 }
 
@@ -147,6 +149,25 @@ grep -Fx 'pam_verbosity = 1' "$sssd_conf" >/dev/null && grep -Fx 'id_provider = 
 grep -F 'sudo install -m 640 -o root -g sssd' "$calls" >/dev/null || fail "sssd.conf keeps the mode and owner it had" "$(cat "$calls")"
 pass "sssd.conf gets short names, a /home/<name> home and the group, and keeps everything else"
 
+# The repair has to run where a directory account can still count on root: a
+# pacman hook runs as root inside the transaction that drops sss, before
+# anything asks sudo to look the caller up.
+[[ -f $pacman_hook ]] || fail "the setup writes a pacman hook" "$(cat "$calls")"
+grep -Fx 'When = PostTransaction' "$pacman_hook" >/dev/null || fail "the hook runs after the transaction, once settings are in place"
+grep -Fx 'Exec = /usr/share/omarchy/bin/omarchy-apply-sssd' "$pacman_hook" >/dev/null || fail "the hook runs the packaged repair helper"
+for package in omarchy-settings omarchy-settings-dev; do
+  grep -Fx "Target = $package" "$pacman_hook" >/dev/null || fail "the hook follows $package, which is what rewrites nsswitch.conf"
+done
+grep -Fx 'Operation = Upgrade' "$pacman_hook" >/dev/null && grep -Fx 'Operation = Install' "$pacman_hook" >/dev/null ||
+  fail "the hook runs when settings are installed or upgraded"
+if grep -E 'AbortOnFail|Operation = Remove' "$pacman_hook" >/dev/null; then
+  fail "a failed repair never aborts, and removing settings never triggers it"
+fi
+grep -F 'sudo install -Dm644 /dev/stdin /etc/pacman.d/hooks/50-omarchy-sssd.hook' "$calls" >/dev/null ||
+  fail "the hook goes to the local hooks directory, which pacman reads alongside the packaged ones" "$(cat "$calls")"
+pass "the setup writes a pacman hook that restores SSSD as root inside a settings transaction"
+cp "$pacman_hook" "$test_tmp/pacman.hook.first"
+
 # Running it again with the same answers changes nothing and does not rejoin.
 cp "$sssd_conf" "$test_tmp/sssd.after"
 : >"$calls"
@@ -156,6 +177,7 @@ if grep -F 'realm join' "$calls" >/dev/null; then
   fail "a computer that is already joined is not joined again"
 fi
 cmp -s "$sssd_conf" "$test_tmp/sssd.after" || fail "running the setup again leaves sssd.conf as it was"
+cmp -s "$pacman_hook" "$test_tmp/pacman.hook.first" || fail "running the setup again leaves the hook as it was"
 pass "running the setup again does not rejoin and leaves sssd.conf as it was"
 
 # Without a group the domain keeps its own access rules.
@@ -171,15 +193,15 @@ pass "without a group the domain's own access rules stay"
 reset_setup
 REALM_DISCOVER_FAILS=1 run_setup --domain example.corp --join-user admin
 (( status == 1 )) || fail "an undiscoverable domain stops the setup" "$output"
-if grep -E 'realm join|install -m' "$calls" >/dev/null; then
-  fail "an undiscoverable domain is not joined or configured"
+if grep -E 'realm join|install -' "$calls" >/dev/null || [[ -e $pacman_hook ]]; then
+  fail "an undiscoverable domain is not joined, configured or hooked"
 fi
 reset_setup
 printf '[sssd]\ndomains = other.corp\n' >"$sssd_conf"
 run_setup --domain example.corp --join-user admin
 (( status == 1 )) || fail "a join without the domain section stops the setup" "$output"
-if grep -F 'install -m' "$calls" >/dev/null; then
-  fail "a configuration without the domain section is not replaced"
+if grep -F 'install -' "$calls" >/dev/null || [[ -e $pacman_hook ]]; then
+  fail "a configuration without the domain section is not replaced or hooked"
 fi
 pass "an undiscoverable domain or a missing domain section changes nothing"
 
@@ -189,7 +211,15 @@ nsswitch="$test_tmp/nsswitch.conf"
 su_pam="$test_tmp/su"
 pam_module="$test_tmp/pam_sss.so"
 patched="$test_tmp/omarchy-apply-sssd"
+root_bin="$test_tmp/root-bin"
+mkdir -p "$root_bin"
+for tool in sed cmp install; do
+  ln -s "/usr/bin/$tool" "$root_bin/$tool"
+done
+# The service probe is the stub below, linked before it exists.
+ln -s "$stub_bin/systemctl" "$root_bin/systemctl"
 sed \
+  -e "s#^  export PATH=/usr/share/omarchy/bin:.*#  export PATH=\"$root_bin\"#" \
   -e "s#^sssd_pam_module=.*#sssd_pam_module=$pam_module#" \
   -e "s#^nsswitch=.*#nsswitch=$nsswitch#" \
   -e "s#^su_pam=.*#su_pam=$su_pam#" \
@@ -301,3 +331,31 @@ password        include         system-auth
 CONF
 ) || fail "su is left as it was when nsswitch.conf can't be read"
 pass "a file that can't be read is never blanked, and the other one is left alone too"
+
+# As root, the way the pacman hook runs it, the helper writes directly. Once sss
+# is gone from nsswitch.conf, sudo can't look a directory account up, so a
+# repair that asks it fails for the very people it is for.
+root_runner=()
+root_runtime_available=1
+if (( EUID != 0 )); then
+  if command -v unshare >/dev/null && unshare --user --map-root-user true 2>/dev/null; then
+    root_runner=(unshare --user --map-root-user)
+  else
+    root_runtime_available=0
+  fi
+fi
+
+if (( root_runtime_available )); then
+  write_system_files
+  if ! PATH="$stub_bin:/usr/bin:/bin" CALL_LOG="$calls" SSSD_ENABLED=1 "${root_runner[@]}" bash "$patched" >"$test_tmp/root.out" 2>&1; then
+    fail "the helper repairs a machine as root" "$(cat "$test_tmp/root.out")"
+  fi
+  [[ ! -s $calls ]] || fail "the helper asks sudo for nothing when it is already root" "$(cat "$calls")"
+  (( $(grep -cE '^(passwd|group|shadow|gshadow):.*[[:space:]]sss$' "$nsswitch") == 4 )) ||
+    fail "the helper restores sss as root" "$(cat "$nsswitch")"
+  (( $(grep -cE '^(auth|account|session) include system-auth$' "$su_pam") == 3 )) ||
+    fail "the helper points su at the system stack as root" "$(cat "$su_pam")"
+  pass "run as root, the helper repairs a machine without asking sudo"
+else
+  skip "no unprivileged user namespace; skipping the root run of omarchy-apply-sssd"
+fi

@@ -41,7 +41,7 @@ You should see its numbers and the groups it belongs to. Then `su - jean` asks f
 
 ## Staying joined through updates
 
-An Omarchy update can reset the system's account lookup, and when it does, SSSD keeps running but every directory account turns into "no such user". So `omarchy update` puts it back after the packages are installed. On a computer that isn't joined, it does nothing and asks for nothing.
+An Omarchy update can reset the system's account lookup, and when it does, SSSD keeps running but every directory account turns into "no such user". That includes the account running the update: `sudo` can't look it up either, so a repair started afterwards as that account would fail. So `omarchy setup ad` also adds a pacman hook, `/etc/pacman.d/hooks/50-omarchy-sssd.hook`, that puts the lookup back as root, inside the same transaction, right after Omarchy's settings are installed. On a computer that isn't joined there is no hook, and nothing changes.
 
 ## What this doesn't do
 
@@ -50,7 +50,7 @@ It doesn't give directory accounts `sudo`, and it doesn't touch your disk encryp
 ## If something goes wrong
 
 - **The setup can't find the domain.** Check that DNS points at a domain controller, and that the name is the domain's, like `example.corp`, not a computer's.
-- **`id jean` says there is no such user** on a computer that did join. Run `omarchy-apply-sssd`, then try again.
+- **`id jean` says there is no such user** on a computer that did join. From a local account, run `omarchy-apply-sssd`, then try again. If the computer was joined before the update hook existed, run `omarchy setup ad` again to add it.
 - **Several wrong passwords in a row** can lock a directory account for the whole company, not just this computer. If a password is refused, stop and check it somewhere else before trying again.
 
-To take the computer out of the domain, run `sudo realm leave example.corp`. Local accounts aren't touched.
+To take the computer out of the domain, run `sudo realm leave example.corp` and delete `/etc/pacman.d/hooks/50-omarchy-sssd.hook`. Local accounts aren't touched.

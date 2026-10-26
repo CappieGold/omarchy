@@ -6,6 +6,23 @@
 
 set -e
 
+# A package hook runs this as root, and so can an update that was started as
+# root. Ignore their PATH so nothing falls through to a user-writable directory.
+if (( EUID == 0 )); then
+  export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/bin
+fi
+
+# Root writes directly. A directory account can't ask sudo once sss is gone from
+# nsswitch.conf, which is why the pacman hook this is run from matters: it runs
+# as root inside the transaction that removes sss.
+as_root() {
+  if (( EUID == 0 )); then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
 sssd_pam_module=/usr/lib/security/pam_sss.so
 nsswitch=/etc/nsswitch.conf
 su_pam=/etc/pam.d/su
@@ -30,7 +47,7 @@ install_if_changed() {
   fi
 
   if ! cmp -s <(printf '%s\n' "$content") "$target"; then
-    printf '%s\n' "$content" | sudo install -Dm644 /dev/stdin "$target"
+    printf '%s\n' "$content" | as_root install -Dm644 /dev/stdin "$target"
     echo "Updated $target"
   fi
 }

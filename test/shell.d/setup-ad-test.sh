@@ -6,6 +6,7 @@ source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
 setup_ad="$ROOT/bin/omarchy-setup-ad"
 apply_sssd="$ROOT/bin/omarchy-apply-sssd"
+apply_hook="$ROOT/bin/omarchy-apply-sssd-hook"
 
 test_tmp=$(mktemp -d)
 trap 'rm -rf "$test_tmp"' EXIT
@@ -14,7 +15,6 @@ stub_bin="$test_tmp/bin"
 calls="$test_tmp/calls"
 sssd_conf="$test_tmp/sssd.conf"
 joined="$test_tmp/joined"
-pacman_hook="$test_tmp/pacman.hook"
 mkdir -p "$stub_bin"
 
 # The commands that reach the machine are stubs that log their arguments; the
@@ -24,7 +24,6 @@ cat >"$stub_bin/sudo" <<'STUB'
 #!/bin/bash
 printf 'sudo %s\n' "$*" >>"$CALL_LOG"
 args=("${@//\/etc\/sssd\/sssd.conf/$SSSD_CONF}")
-args=("${args[@]//\/etc\/pacman.d\/hooks\/50-omarchy-sssd.hook/$PACMAN_HOOK}")
 
 case ${args[0]} in
   cat) cat "${args[@]:1}" ;;
@@ -59,7 +58,7 @@ cat >"$stub_bin/omarchy-i18n" <<'STUB'
 echo "$1"
 STUB
 
-for command in omarchy-pkg-add omarchy-pkg-aur-add omarchy-apply-sssd omarchy-apply-lock; do
+for command in omarchy-pkg-add omarchy-pkg-aur-add omarchy-apply-sssd-hook omarchy-apply-sssd omarchy-apply-lock; do
   cat >"$stub_bin/$command" <<'STUB'
 #!/bin/bash
 printf '%s %s\n' "${0##*/}" "$*" >>"$CALL_LOG"
@@ -89,7 +88,7 @@ CONF
 
 run_setup() {
   set +e
-  output=$(env PATH="$stub_bin:/usr/bin:/bin" CALL_LOG="$calls" SSSD_CONF="$sssd_conf" JOINED="$joined" PACMAN_HOOK="$pacman_hook" \
+  output=$(env PATH="$stub_bin:/usr/bin:/bin" CALL_LOG="$calls" SSSD_CONF="$sssd_conf" JOINED="$joined" \
     REALM_DISCOVER_FAILS="${REALM_DISCOVER_FAILS:-}" bash "$setup_ad" "$@" 2>&1)
   status=$?
   set -e
@@ -97,7 +96,7 @@ run_setup() {
 
 reset_setup() {
   : >"$calls"
-  rm -f "$joined" "$pacman_hook"
+  rm -f "$joined"
   write_sssd_conf
 }
 
@@ -131,13 +130,13 @@ run_setup --domain Example.Corp --group "Linux Users" --join-user admin
 grep -Fx 'sudo realm join -v -U admin Example.Corp' "$calls" >/dev/null || fail "the join names the account and the domain" "$(cat "$calls")"
 
 for step in "omarchy-pkg-add sssd krb5 samba" "omarchy-pkg-aur-add realmd adcli" "realm discover Example.Corp" \
-  "sudo realm join" "sudo systemctl enable --now sssd.service" "omarchy-apply-sssd" "omarchy-apply-lock"; do
+  "sudo realm join" "sudo systemctl enable --now sssd.service" "omarchy-apply-sssd-hook" "omarchy-apply-sssd " "omarchy-apply-lock"; do
   grep -nF "$step" "$calls" >/dev/null || fail "the setup runs: $step" "$(cat "$calls")"
 done
-order=$(grep -nE '^(omarchy-pkg-add|omarchy-pkg-aur-add|realm discover|sudo realm join|sudo systemctl enable|omarchy-apply-sssd|omarchy-apply-lock)' "$calls" | cut -d: -f2 | cut -d' ' -f1-2 | tr '\n' ',')
-[[ $order == "omarchy-pkg-add sssd,omarchy-pkg-aur-add realmd,realm discover,sudo realm,sudo systemctl,omarchy-apply-sssd ,omarchy-apply-lock ," ]] ||
-  fail "packages come before the join, and SSSD is wired in after it" "$order"
-pass "the setup installs, discovers, joins, then wires SSSD into the system"
+order=$(grep -nE '^(omarchy-pkg-add|omarchy-pkg-aur-add|realm discover|sudo realm join|sudo systemctl enable|omarchy-apply-sssd-hook|omarchy-apply-sssd|omarchy-apply-lock)' "$calls" | cut -d: -f2 | cut -d' ' -f1-2 | tr '\n' ',')
+[[ $order == "omarchy-pkg-add sssd,omarchy-pkg-aur-add realmd,realm discover,sudo realm,sudo systemctl,omarchy-apply-sssd-hook ,omarchy-apply-sssd ,omarchy-apply-lock ," ]] ||
+  fail "packages come before the join, and the update hook and SSSD are wired in after it" "$order"
+pass "the setup installs, discovers, joins, then installs the update hook and wires SSSD into the system"
 
 for expected in 'use_fully_qualified_names = False' 'fallback_homedir = /home/%u' 'access_provider = simple' 'simple_allow_groups = Linux Users'; do
   (( $(grep -cFx "$expected" "$sssd_conf") == 1 )) || fail "sssd.conf holds exactly one: $expected" "$(cat "$sssd_conf")"
@@ -149,25 +148,6 @@ grep -Fx 'pam_verbosity = 1' "$sssd_conf" >/dev/null && grep -Fx 'id_provider = 
 grep -F 'sudo install -m 640 -o root -g sssd' "$calls" >/dev/null || fail "sssd.conf keeps the mode and owner it had" "$(cat "$calls")"
 pass "sssd.conf gets short names, a /home/<name> home and the group, and keeps everything else"
 
-# The repair has to run where a directory account can still count on root: a
-# pacman hook runs as root inside the transaction that drops sss, before
-# anything asks sudo to look the caller up.
-[[ -f $pacman_hook ]] || fail "the setup writes a pacman hook" "$(cat "$calls")"
-grep -Fx 'When = PostTransaction' "$pacman_hook" >/dev/null || fail "the hook runs after the transaction, once settings are in place"
-grep -Fx 'Exec = /usr/share/omarchy/bin/omarchy-apply-sssd' "$pacman_hook" >/dev/null || fail "the hook runs the packaged repair helper"
-for package in omarchy-settings omarchy-settings-dev; do
-  grep -Fx "Target = $package" "$pacman_hook" >/dev/null || fail "the hook follows $package, which is what rewrites nsswitch.conf"
-done
-grep -Fx 'Operation = Upgrade' "$pacman_hook" >/dev/null && grep -Fx 'Operation = Install' "$pacman_hook" >/dev/null ||
-  fail "the hook runs when settings are installed or upgraded"
-if grep -E 'AbortOnFail|Operation = Remove' "$pacman_hook" >/dev/null; then
-  fail "a failed repair never aborts, and removing settings never triggers it"
-fi
-grep -F 'sudo install -Dm644 /dev/stdin /etc/pacman.d/hooks/50-omarchy-sssd.hook' "$calls" >/dev/null ||
-  fail "the hook goes to the local hooks directory, which pacman reads alongside the packaged ones" "$(cat "$calls")"
-pass "the setup writes a pacman hook that restores SSSD as root inside a settings transaction"
-cp "$pacman_hook" "$test_tmp/pacman.hook.first"
-
 # Running it again with the same answers changes nothing and does not rejoin.
 cp "$sssd_conf" "$test_tmp/sssd.after"
 : >"$calls"
@@ -177,7 +157,6 @@ if grep -F 'realm join' "$calls" >/dev/null; then
   fail "a computer that is already joined is not joined again"
 fi
 cmp -s "$sssd_conf" "$test_tmp/sssd.after" || fail "running the setup again leaves sssd.conf as it was"
-cmp -s "$pacman_hook" "$test_tmp/pacman.hook.first" || fail "running the setup again leaves the hook as it was"
 pass "running the setup again does not rejoin and leaves sssd.conf as it was"
 
 # Without a group the domain keeps its own access rules.
@@ -193,14 +172,14 @@ pass "without a group the domain's own access rules stay"
 reset_setup
 REALM_DISCOVER_FAILS=1 run_setup --domain example.corp --join-user admin
 (( status == 1 )) || fail "an undiscoverable domain stops the setup" "$output"
-if grep -E 'realm join|install -' "$calls" >/dev/null || [[ -e $pacman_hook ]]; then
+if grep -E 'realm join|install -|omarchy-apply-sssd' "$calls" >/dev/null; then
   fail "an undiscoverable domain is not joined, configured or hooked"
 fi
 reset_setup
 printf '[sssd]\ndomains = other.corp\n' >"$sssd_conf"
 run_setup --domain example.corp --join-user admin
 (( status == 1 )) || fail "a join without the domain section stops the setup" "$output"
-if grep -F 'install -' "$calls" >/dev/null || [[ -e $pacman_hook ]]; then
+if grep -E 'install -|omarchy-apply-sssd' "$calls" >/dev/null; then
   fail "a configuration without the domain section is not replaced or hooked"
 fi
 pass "an undiscoverable domain or a missing domain section changes nothing"
@@ -213,7 +192,7 @@ pam_module="$test_tmp/pam_sss.so"
 patched="$test_tmp/omarchy-apply-sssd"
 root_bin="$test_tmp/root-bin"
 mkdir -p "$root_bin"
-for tool in sed cmp install; do
+for tool in sed cmp install cat; do
   ln -s "/usr/bin/$tool" "$root_bin/$tool"
 done
 # The service probe is the stub below, linked before it exists.
@@ -358,4 +337,73 @@ if (( root_runtime_available )); then
   pass "run as root, the helper repairs a machine without asking sudo"
 else
   skip "no unprivileged user namespace; skipping the root run of omarchy-apply-sssd"
+fi
+
+# omarchy-apply-sssd-hook: the pacman hook that runs the repair as root inside a
+# settings transaction, where a directory account can still count on root.
+# Another scratch copy, since the real paths are under /etc and /usr.
+hook_file="$test_tmp/pacman.hook"
+patched_hook="$test_tmp/omarchy-apply-sssd-hook"
+sed \
+  -e "s#^sssd_pam_module=.*#sssd_pam_module=$pam_module#" \
+  -e "s#^pacman_hook=.*#pacman_hook=$hook_file#" \
+  -e "s#^  export PATH=/usr/share/omarchy/bin:.*#  export PATH=\"$root_bin\"#" \
+  "$apply_hook" >"$patched_hook"
+
+run_hook() {
+  PATH="$stub_bin:/usr/bin:/bin" CALL_LOG="$calls" SSSD_ENABLED="${SSSD_ENABLED:-1}" bash "$patched_hook" >"$test_tmp/hook.out" 2>&1
+}
+
+# Every update calls it, so a machine without SSSD must see no change at all.
+rm -f "$hook_file" "$pam_module"
+: >"$calls"
+SSSD_ENABLED=0 run_hook || fail "a machine without SSSD runs the hook installer without error"
+: >"$pam_module"
+SSSD_ENABLED=0 run_hook || fail "a machine with the module but no service runs the hook installer without error"
+rm "$pam_module"
+run_hook || fail "a machine with the service but no module runs the hook installer without error"
+[[ ! -e $hook_file && ! -s $calls ]] || fail "a machine without SSSD set up gets no hook and asks for no privileges" "$(cat "$calls")"
+pass "a machine without SSSD set up gets no hook and asks for no privileges"
+
+: >"$pam_module"
+run_hook || fail "the hook is installed where SSSD is set up" "$(cat "$test_tmp/hook.out")"
+[[ -f $hook_file ]] || fail "the hook installer writes the hook" "$(cat "$calls")"
+grep -F "sudo install -Dm644 /dev/stdin $hook_file" "$calls" >/dev/null ||
+  fail "the hook goes in through sudo, from stdin" "$(cat "$calls")"
+grep -Fx 'When = PostTransaction' "$hook_file" >/dev/null || fail "the hook runs after the transaction, once settings are in place"
+grep -Fx 'Exec = /usr/share/omarchy/bin/omarchy-apply-sssd' "$hook_file" >/dev/null || fail "the hook runs the packaged repair helper"
+for package in omarchy-settings omarchy-settings-dev; do
+  grep -Fx "Target = $package" "$hook_file" >/dev/null || fail "the hook follows $package, which is what rewrites nsswitch.conf"
+done
+grep -Fx 'Operation = Upgrade' "$hook_file" >/dev/null && grep -Fx 'Operation = Install' "$hook_file" >/dev/null ||
+  fail "the hook runs when settings are installed or upgraded"
+if grep -E 'AbortOnFail|Operation = Remove' "$hook_file" >/dev/null; then
+  fail "a failed repair never aborts, and removing settings never triggers it"
+fi
+pass "the hook restores SSSD as root after a settings transaction, and never aborts one"
+
+# An update that finds the hook in place asks for no privileges, and one that
+# finds it changed puts it back.
+cp "$hook_file" "$test_tmp/pacman.hook.first"
+: >"$calls"
+run_hook || fail "the hook installer runs again"
+[[ ! -s $calls ]] || fail "a hook that is already in place is not written again" "$(cat "$calls")"
+printf 'stale\n' >"$hook_file"
+run_hook || fail "the hook installer replaces a changed hook"
+cmp -s "$hook_file" "$test_tmp/pacman.hook.first" || fail "a changed hook is put back as it was shipped"
+pass "a hook that is in place asks for no privileges, and a changed one is put back"
+
+# Root writes directly: the update installs the hook as the account running it,
+# but anything started as root, or a sudo that no longer knows the caller, must
+# not depend on sudo.
+if (( root_runtime_available )); then
+  rm -f "$hook_file"
+  : >"$calls"
+  if ! PATH="$stub_bin:/usr/bin:/bin" CALL_LOG="$calls" SSSD_ENABLED=1 "${root_runner[@]}" bash "$patched_hook" >"$test_tmp/hook.out" 2>&1; then
+    fail "the hook installer runs as root" "$(cat "$test_tmp/hook.out")"
+  fi
+  [[ -f $hook_file && ! -s $calls ]] || fail "run as root, the hook installer writes without asking sudo" "$(cat "$calls")"
+  pass "run as root, the hook installer writes the hook without asking sudo"
+else
+  skip "no unprivileged user namespace; skipping the root run of omarchy-apply-sssd-hook"
 fi

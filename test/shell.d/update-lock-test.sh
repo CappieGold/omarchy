@@ -64,6 +64,7 @@ for command in \
   omarchy-update-dev \
   omarchy-update-keyring \
   omarchy-update-system-pkgs \
+  omarchy-apply-sssd-hook \
   omarchy-apply-sssd \
   omarchy-migrate \
   omarchy-update-aur-pkgs \

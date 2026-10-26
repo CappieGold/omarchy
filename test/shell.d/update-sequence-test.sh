@@ -22,6 +22,7 @@ steps=(
   omarchy-update-boot
   omarchy-update-keyring
   omarchy-update-system-pkgs
+  omarchy-apply-sssd-hook
   omarchy-apply-sssd
   omarchy-migrate
   omarchy-hook
@@ -77,6 +78,7 @@ expected_steps() {
     omarchy-update-stay-awake \
     omarchy-update-dev \
     omarchy-update-keyring \
+    omarchy-apply-sssd-hook \
     omarchy-update-system-pkgs \
     omarchy-apply-sssd \
     omarchy-migrate \
@@ -143,3 +145,20 @@ grep -q '^omarchy-migrate ' "$test_tmp/steps" || fail "a failed SSSD re-apply st
 grep -F 'Run omarchy-apply-sssd to retry' "$test_tmp/err" >/dev/null ||
   fail "a failed SSSD re-apply tells the user how to retry" "$(cat "$test_tmp/err")"
 pass "a failed SSSD re-apply is reported and does not stop the update"
+
+# The hook has to be in place before the packages are upgraded: that upgrade is
+# what takes sss out of nsswitch.conf, after which sudo can no longer look a
+# directory account up. A hook that could not be installed is reported, and
+# does not stop the update.
+run_update -y || fail "an update where everything works reports a failure"
+hook_line=$(grep -n '^omarchy-apply-sssd-hook ' "$test_tmp/steps" | cut -d: -f1)
+packages_line=$(grep -n '^omarchy-update-system-pkgs ' "$test_tmp/steps" | cut -d: -f1)
+(( hook_line < packages_line )) || fail "the SSSD hook is installed before the packages are upgraded"
+pass "the SSSD hook is installed before the packages are upgraded"
+
+FAILING_STEP=omarchy-apply-sssd-hook run_update -y ||
+  fail "an update still finishes when the SSSD hook can't be installed" "$(cat "$test_tmp/err")"
+grep -q '^omarchy-update-system-pkgs ' "$test_tmp/steps" || fail "a failed SSSD hook install still lets the packages upgrade"
+grep -F 'Run omarchy-apply-sssd-hook to retry' "$test_tmp/err" >/dev/null ||
+  fail "a failed SSSD hook install tells the user how to retry" "$(cat "$test_tmp/err")"
+pass "a failed SSSD hook install is reported and does not stop the update"

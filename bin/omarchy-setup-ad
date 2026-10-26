@@ -8,7 +8,6 @@
 set -e
 
 sssd_conf=/etc/sssd/sssd.conf
-pacman_hook=/etc/pacman.d/hooks/50-omarchy-sssd.hook
 domain_pattern='^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$'
 group_pattern='^[^,=\\"[:cntrl:]]+$'
 account_pattern='^[A-Za-z0-9._@-]+$'
@@ -157,32 +156,6 @@ configure_sssd() {
   sudo install -m "$mode" -o "${owner%:*}" -g "${owner#*:}" "$work" "$sssd_conf"
 }
 
-# A settings update copies nsswitch.conf back without sss, and then sudo can no
-# longer look a directory account up, so a repair that asks sudo fails for the
-# very people it is for. A pacman hook runs as root inside that transaction,
-# right after the copy, before anything needs sudo again.
-install_pacman_hook() {
-  local hook
-
-  hook=$(cat <<'HOOK'
-# Written by omarchy setup ad. Delete it to stop restoring SSSD after updates.
-[Trigger]
-Operation = Install
-Operation = Upgrade
-Type = Package
-Target = omarchy-settings
-Target = omarchy-settings-dev
-
-[Action]
-Description = Restoring SSSD account lookup...
-When = PostTransaction
-Exec = /usr/share/omarchy/bin/omarchy-apply-sssd
-HOOK
-)
-
-  printf '%s\n' "$hook" | sudo install -Dm644 /dev/stdin "$pacman_hook"
-}
-
 echo -e "\e[32mJoining this computer to $DOMAIN.\n\e[0m"
 
 echo "Installing the directory client packages..."
@@ -211,8 +184,9 @@ sudo systemctl restart sssd.service
 sudo sss_cache -E || true
 
 # Domain lookups, su and the lock screen only know directory accounts once
-# these are told about SSSD, and updates have to keep them that way.
-install_pacman_hook
+# these are told about SSSD, and updates have to keep them that way: the hook
+# restores sss inside the settings transaction that would drop it.
+omarchy-apply-sssd-hook
 omarchy-apply-sssd
 omarchy-apply-lock
 

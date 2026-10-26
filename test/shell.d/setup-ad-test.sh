@@ -272,3 +272,32 @@ run_apply >/dev/null || fail "the helper runs with sss already on one database"
 (( $(grep -c '^passwd: files systemd sss$' "$nsswitch") == 1 )) || fail "sss is not added twice" "$(cat "$nsswitch")"
 grep -Fx 'group: files [SUCCESS=merge] systemd sss' "$nsswitch" >/dev/null || fail "the other databases still get sss"
 pass "sss already present on a database is not added twice"
+
+# A file that can't be read must never be replaced by an empty one, and neither
+# file may change when the other can't be read.
+write_system_files
+rm "$su_pam"
+if run_apply >"$test_tmp/unreadable.out" 2>&1; then
+  fail "an unreadable su file stops the helper"
+fi
+[[ ! -s $calls ]] || fail "an unreadable su file changes nothing" "$(cat "$calls")"
+cmp -s "$nsswitch" "$test_tmp/nsswitch.before" ||
+  fail "nsswitch.conf is left as it was when su can't be read"
+
+write_system_files
+rm "$nsswitch"
+if run_apply >"$test_tmp/unreadable.out" 2>&1; then
+  fail "an unreadable nsswitch.conf stops the helper"
+fi
+[[ ! -s $calls && ! -e $nsswitch ]] || fail "an unreadable nsswitch.conf is not recreated blank" "$(cat "$calls")"
+cmp -s "$su_pam" <(cat <<'CONF'
+#%PAM-1.0
+auth            sufficient      pam_rootok.so
+auth            required        pam_unix.so
+account         required        pam_unix.so
+session         required        pam_unix.so
+session         required        pam_limits.so
+password        include         system-auth
+CONF
+) || fail "su is left as it was when nsswitch.conf can't be read"
+pass "a file that can't be read is never blanked, and the other one is left alone too"
